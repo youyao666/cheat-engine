@@ -105,6 +105,7 @@ resourcestring
 implementation
 
 uses autoassembler, MainUnit, MainUnit2, LuaClass, frmluaengineunit, plugin, pluginexports,
+  {$ifdef windows}DBVMDebuggerInterface,{$endif}
   formsettingsunit, MemoryRecordUnit, debuggertypedefinitions, symbolhandler,
   symbolhandlerstructs, types,
   frmautoinjectunit, simpleaobscanner, addresslist, memscan, foundlisthelper,
@@ -3355,6 +3356,9 @@ begin
 
     if (CurrentDebuggerInterface is TKernelDebugInterface) then
       lua_pushinteger(L, 3);
+
+    if (CurrentDebuggerInterface is TDBVMDebugInterface) then
+      lua_pushinteger(L, 4);
     {$ENDIF}
 
     {$ifdef darwin}
@@ -3368,6 +3372,48 @@ begin
   end
   else
     result:=0;
+end;
+
+function lua_getDBVMDebugMemoryDiagnostics(L: PLua_State): integer; cdecl;
+var
+  active: boolean;
+  processHandle: THandle;
+  cr3: QWORD;
+  lastReadBackend, lastWriteBackend, lastQueryBackend: integer;
+  readCR3Attempts, readCR3Success, readFallback, writeCR3Attempts, writeCR3Success, writeFallback,
+  queryCR3Attempts, queryCR3Success, queryFallback: QWORD;
+  tableIndex: integer;
+begin
+  lua_pop(L, lua_gettop(L));
+  {$ifdef windows}
+  GetDBVMDebugMemoryDiagnostics(active, processHandle, cr3,
+    lastReadBackend, lastWriteBackend, lastQueryBackend,
+    readCR3Attempts, readCR3Success, readFallback,
+    writeCR3Attempts, writeCR3Success, writeFallback,
+    queryCR3Attempts, queryCR3Success, queryFallback);
+  lua_newtable(L);
+  tableIndex:=lua_gettop(L);
+  lua_setbasictableentry(L, tableIndex, 'active', active);
+  lua_setbasictableentry(L, tableIndex, 'process_handle', qword(processHandle));
+  lua_setbasictableentry(L, tableIndex, 'cr3', cr3);
+  lua_setbasictableentry(L, tableIndex, 'last_read_backend', lastReadBackend);
+  lua_setbasictableentry(L, tableIndex, 'last_write_backend', lastWriteBackend);
+  lua_setbasictableentry(L, tableIndex, 'last_query_backend', lastQueryBackend);
+  lua_setbasictableentry(L, tableIndex, 'read_cr3_attempts', readCR3Attempts);
+  lua_setbasictableentry(L, tableIndex, 'read_cr3_success', readCR3Success);
+  lua_setbasictableentry(L, tableIndex, 'read_fallback', readFallback);
+  lua_setbasictableentry(L, tableIndex, 'write_cr3_attempts', writeCR3Attempts);
+  lua_setbasictableentry(L, tableIndex, 'write_cr3_success', writeCR3Success);
+  lua_setbasictableentry(L, tableIndex, 'write_fallback', writeFallback);
+  lua_setbasictableentry(L, tableIndex, 'query_cr3_attempts', queryCR3Attempts);
+  lua_setbasictableentry(L, tableIndex, 'query_cr3_success', queryCR3Success);
+  lua_setbasictableentry(L, tableIndex, 'query_fallback', queryFallback);
+  {$else}
+  lua_newtable(L);
+  tableIndex:=lua_gettop(L);
+  lua_setbasictableentry(L, tableIndex, 'active', false);
+  {$endif}
+  result:=1;
 end;
 
 function debug_getBreakpointList(L: Plua_State): integer; cdecl;
@@ -5260,6 +5306,180 @@ begin
   end;
   {$ENDIF}
 
+end;
+
+function lua_ceai_isDBKLoaded(L: Plua_State): integer; cdecl;
+var loaded: boolean;
+begin
+  loaded:=false;
+  {$ifdef windows}
+  loaded:=DBK32functions.isDriverLoaded(nil);
+  {$endif}
+  lua_pushboolean(L, loaded);
+  result:=1;
+end;
+
+function lua_ceai_getDBKDriverVersion(L: Plua_State): integer; cdecl;
+var version: dword;
+begin
+  version:=0;
+  {$ifdef windows}
+  if DBK32functions.isDriverLoaded(nil) then
+    version:=DBK32functions.GetDriverVersion;
+  {$endif}
+  lua_pushinteger(L, version);
+  result:=1;
+end;
+
+function lua_ceai_connectDBKDevice(L: Plua_State): integer; cdecl;
+var
+  deviceName: widestring;
+  deviceNameUtf8: UTF8String;
+  connected: boolean;
+  version: dword;
+begin
+  deviceName:='';
+  if lua_gettop(L)>=1 then
+    deviceName:=Lua_ToString(L, 1);
+
+  connected:=false;
+  version:=0;
+  {$ifdef windows}
+  connected:=DBK32functions.DBK32ConnectExistingDevice(deviceName);
+  if connected then
+  begin
+    LoadDBK32;
+  end;
+  version:=DBK32functions.agentDeviceVersion;
+  {$endif}
+
+  lua_pushboolean(L, connected);
+  lua_pushinteger(L, version);
+  if deviceName='' then
+    deviceName:=GetEnvironmentVariable('CEAI_DBK_DEVICE');
+  if deviceName='' then
+    deviceName:='CEDRIVER73';
+  deviceNameUtf8:=UTF8Encode(deviceName);
+  lua_pushstring(L, pchar(deviceNameUtf8));
+  {$ifdef windows}
+  lua_pushinteger(L, DBK32functions.agentDeviceError);
+  {$else}
+  lua_pushinteger(L, 0);
+  {$endif}
+  lua_pushinteger(L, DBK32functions.currentversion);
+  result:=5;
+end;
+
+function lua_ceai_getDBKDeviceDiagnostics(L: Plua_State): integer; cdecl;
+var deviceNameUtf8: UTF8String;
+begin
+  {$ifdef windows}
+  deviceNameUtf8:=UTF8Encode(DBK32functions.agentDeviceName);
+  lua_pushstring(L, pchar(deviceNameUtf8));
+  lua_pushinteger(L, DBK32functions.agentDeviceVersion);
+  lua_pushinteger(L, DBK32functions.agentDeviceError);
+  {$else}
+  lua_pushstring(L, '');
+  lua_pushinteger(L, 0);
+  lua_pushinteger(L, 0);
+  {$endif}
+  lua_pushinteger(L, DBK32functions.currentversion);
+  result:=4;
+end;
+
+function lua_ceai_getDBVMStatus(L: Plua_State): integer; cdecl;
+var
+  running, capable, ept, imageExists, driverLoaded: boolean;
+  version: dword;
+  freeBytes, pages: qword;
+  imagePath: string;
+  tableIndex: integer;
+begin
+  lua_pop(L, lua_gettop(L));
+  running:=false;
+  capable:=false;
+  ept:=false;
+  imageExists:=false;
+  driverLoaded:=false;
+  version:=0;
+  freeBytes:=0;
+  pages:=0;
+  imagePath:='';
+
+  {$ifdef windows}
+  imagePath:=IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))+'vmdisk.img';
+  imageExists:=FileExists(imagePath);
+  driverLoaded:=DBK32functions.isDriverLoaded(nil);
+  version:=dbvm_version;
+  running:=version>0;
+  capable:=running or isDBVMCapable;
+  try
+    if driverLoaded then
+      ept:=hasEPTSupport;
+  except
+    ept:=false;
+  end;
+  if running then
+    freeBytes:=dbvm_getMemory(pages);
+  {$endif}
+
+  lua_newtable(L);
+  tableIndex:=lua_gettop(L);
+  lua_setbasictableentry(L, tableIndex, 'running', running);
+  lua_setbasictableentry(L, tableIndex, 'capable', capable);
+  lua_setbasictableentry(L, tableIndex, 'ept', ept);
+  lua_setbasictableentry(L, tableIndex, 'driver_loaded', driverLoaded);
+  lua_setbasictableentry(L, tableIndex, 'image_exists', imageExists);
+  lua_setbasictableentry(L, tableIndex, 'image_path', imagePath);
+  lua_setbasictableentry(L, tableIndex, 'version', version);
+  lua_setbasictableentry(L, tableIndex, 'free_bytes', freeBytes);
+  lua_setbasictableentry(L, tableIndex, 'free_pages', pages);
+  result:=1;
+end;
+
+function lua_ceai_startDBVM(L: Plua_State): integer; cdecl;
+var
+  started: boolean;
+  version: dword;
+  errorMessage, imagePath: string;
+begin
+  lua_pop(L, lua_gettop(L));
+  started:=false;
+  version:=0;
+  errorMessage:='';
+
+  {$ifdef windows}
+  try
+    imagePath:=IncludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)))+'vmdisk.img';
+    version:=dbvm_version;
+    if version>0 then
+      started:=true
+    else if not DBK32functions.isDriverLoaded(nil) then
+      errorMessage:='DBK driver is not connected'
+    else if not FileExists(imagePath) then
+      errorMessage:='DBVM image is missing: '+imagePath
+    else if not isDBVMCapable then
+      errorMessage:='CPU virtualization is unavailable or already owned by another hypervisor'
+    else
+    begin
+      LaunchDBVM(-1);
+      version:=dbvm_version;
+      started:=version>0;
+      if not started then
+        errorMessage:='DBVM launch returned without a running hypervisor';
+    end;
+  except
+    on E: Exception do
+      errorMessage:=E.Message;
+  end;
+  {$else}
+  errorMessage:='DBVM is only supported on Windows';
+  {$endif}
+
+  lua_pushboolean(L, started);
+  lua_pushinteger(L, version);
+  lua_pushstring(L, PChar(UTF8Encode(errorMessage)));
+  result:=3;
 end;
 
 function dbk_useKernelmodeOpenProcess(L: Plua_State): integer; cdecl;
@@ -7923,6 +8143,20 @@ function lua_getCheatEngineProcessID(L: PLua_State): integer; cdecl;
 begin
   lua_pop(L, lua_gettop(l));
   lua_pushinteger(L, GetCurrentProcessId);
+  result:=1;
+end;
+
+function lua_generateGUIDString(L: PLua_State): integer; cdecl;
+var
+  guid: TGUID;
+  guidString: string;
+begin
+  lua_pop(L, lua_gettop(L));
+  if CreateGUID(guid)<>0 then
+    raise exception.create('Failed to generate GUID');
+
+  guidString:=GUIDToString(guid);
+  lua_pushstring(L, PChar(guidString));
   result:=1;
 end;
 
@@ -16448,6 +16682,7 @@ begin
     lua_register(L, 'debug_getBreakpointList', debug_getBreakpointList);
     lua_register(L, 'debug_isDebugging', debug_isDebugging);
     lua_register(L, 'debug_getCurrentDebuggerInterface', debug_getCurrentDebuggerInterface);
+    lua_register(L, 'getDBVMDebugMemoryDiagnostics', lua_getDBVMDebugMemoryDiagnostics);
     lua_register(L, 'debug_canBreak', debug_canBreak);
     lua_register(L, 'debug_breakThread', debug_breakThread);
     lua_register(L, 'debug_isBroken', debug_isBroken);
@@ -16643,6 +16878,12 @@ begin
     Lua_register(L, 'beep', beep);
 
     lua_register(L, 'dbk_initialize', dbk_initialize);
+    lua_register(L, 'ceai_isDBKLoaded', lua_ceai_isDBKLoaded);
+    lua_register(L, 'ceai_getDBKDriverVersion', lua_ceai_getDBKDriverVersion);
+    lua_register(L, 'ceai_connectDBKDevice', lua_ceai_connectDBKDevice);
+    lua_register(L, 'ceai_getDBKDeviceDiagnostics', lua_ceai_getDBKDeviceDiagnostics);
+    lua_register(L, 'ceai_getDBVMStatus', lua_ceai_getDBVMStatus);
+    lua_register(L, 'ceai_startDBVM', lua_ceai_startDBVM);
     lua_register(L, 'dbk_useKernelmodeOpenProcess', dbk_useKernelmodeOpenProcess);
     lua_register(L, 'dbk_useKernelmodeProcessMemoryAccess', dbk_useKernelmodeProcessMemoryAccess);
     lua_register(L, 'dbk_useKernelmodeQueryMemoryRegions', dbk_useKernelmodeQueryMemoryRegions);
@@ -16749,6 +16990,7 @@ begin
     lua_register(L, 'deallocateSharedMemory', deallocateSharedMemory);
     lua_register(L, 'getCheatEngineDir', getCheatEngineDir);
     lua_register(L, 'getCheatEngineProcessID', lua_getCheatEngineProcessID);
+    lua_register(L, 'generateGUIDString', lua_generateGUIDString);
 
     lua_register(L, 'disassemble', disassemble_lua);
     lua_register(L, 'splitDisassembledString', splitDisassembledString);

@@ -1516,6 +1516,7 @@ begin
     1: formSettings.cbUseWindowsDebugger.checked:=true;
     2: formSettings.cbUseVEHDebugger.checked:=true;
     3: formSettings.cbKDebug.checked:=true;
+    4: formSettings.cbUseDBVMDebugger.checked:=true;
   end;
 
   if startdebuggerifneeded(false) then

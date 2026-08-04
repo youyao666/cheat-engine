@@ -1,3 +1,9 @@
+-- CE-AI launches the source build headlessly; CEShare is unrelated to the
+-- control plane and its first-run/network dialogs would block the bridge.
+if os.getenv('CEAI_AGENT_MODE') == '1' then
+  return
+end
+
 if getTranslationFolder()~='' then
   loadPOFile(getTranslationFolder()..'CeShare.po')
 end

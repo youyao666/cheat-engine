@@ -8,6 +8,8 @@
 
 Cheat Engine is a development environment focused on modding games and applications for personal use.
 
+本分支的中文介绍与 AI 控制扩展说明见 [README_CN.md](README_CN.md)。
+
 
 # Download
 

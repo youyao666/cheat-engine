@@ -254,6 +254,9 @@ var hdevice: thandle=INVALID_HANDLE_VALUE; //handle to my the device driver
     ThreadsProcess,ThreadListEntry:dword;
 
     processeventname, threadeventname: widestring;
+    agentDeviceName: widestring;
+    agentDeviceVersion: dword=0;
+    agentDeviceError: dword=0;
     processevent,threadevent:thandle;
 
     ownprocess: thandle=0; //needed for simple kernelmemory access
@@ -402,6 +405,7 @@ procedure allocateMemoryForDBVM(pagecount: QWORD);
 function GetGDT(limit: pword):ptruint; stdcall;
 
 function isDriverLoaded(SigningIsTheCause: PBOOL): BOOL; stdcall;
+function DBK32ConnectExistingDevice(const deviceName: widestring): boolean;
 
 procedure DBK32Initialize;
 
@@ -488,6 +492,107 @@ begin
 
     result:=false;
   end;
+end;
+
+function DBK32ConnectExistingDevice(const deviceName: widestring): boolean;
+var
+  candidate: widestring;
+  i: integer;
+begin
+  result:=false;
+  agentDeviceError:=0;
+  agentDeviceVersion:=0;
+
+  if hdevice<>INVALID_HANDLE_VALUE then
+  begin
+    agentDeviceVersion:=GetDriverVersion;
+    result:=agentDeviceVersion=currentversion;
+    if not result then
+      agentDeviceError:=ERROR_REVISION_MISMATCH;
+    exit;
+  end;
+
+  candidate:=deviceName;
+  if candidate='' then
+    candidate:=GetEnvironmentVariable('CEAI_DBK_DEVICE');
+  if candidate='' then
+    candidate:='CEDRIVER73';
+  agentDeviceName:=candidate;
+
+  // Accept only a device basename.  This helper must not become an arbitrary
+  // path opener through the Agent bridge.
+  if (length(candidate)=0) or (length(candidate)>64) then
+  begin
+    agentDeviceError:=ERROR_INVALID_NAME;
+    exit;
+  end;
+  for i:=1 to length(candidate) do
+    if (candidate[i]='\') or (candidate[i]='/') or (candidate[i]=':') or
+       (candidate[i]=#0) then
+    begin
+      agentDeviceError:=ERROR_INVALID_NAME;
+      exit;
+    end;
+
+  hUltimapDevice:=INVALID_HANDLE_VALUE;
+  hdevice:=CreateFileW(pwidechar('\\.\'+candidate),
+                GENERIC_READ or GENERIC_WRITE,
+                FILE_SHARE_READ or FILE_SHARE_WRITE,
+                nil, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, 0);
+  if hdevice=INVALID_HANDLE_VALUE then
+  begin
+    agentDeviceError:=GetLastError;
+    exit;
+  end;
+
+  applicationpath:=ExtractFilePath(ParamStr(0));
+  driverloc:=applicationpath+'dbk64.sys';
+  processeventname:='DBKProcList60';
+  threadeventname:='DBKThreadList60';
+  {$ifdef cpu64}
+  iswow64:=true;
+  {$endif}
+
+  agentDeviceVersion:=GetDriverVersion;
+  if agentDeviceVersion<>currentversion then
+  begin
+    agentDeviceError:=ERROR_REVISION_MISMATCH;
+    CloseHandle(hdevice);
+    hdevice:=INVALID_HANDLE_VALUE;
+    exit;
+  end;
+
+  if not InitializeDriver(0,0) then
+  begin
+    // Preserve the actual DeviceIoControl error for Agent diagnostics.  The
+    // generic ERROR_GEN_FAILURE fallback made handshake failures opaque.
+    agentDeviceError:=GetLastError;
+    if agentDeviceError=ERROR_SUCCESS then
+      agentDeviceError:=ERROR_GEN_FAILURE;
+    if processevent<>0 then
+    begin
+      CloseHandle(processevent);
+      processevent:=0;
+    end;
+    if threadevent<>0 then
+    begin
+      CloseHandle(threadevent);
+      threadevent:=0;
+    end;
+    if ownprocess<>0 then
+    begin
+      CloseHandle(ownprocess);
+      ownprocess:=0;
+    end;
+    CloseHandle(hdevice);
+    hdevice:=INVALID_HANDLE_VALUE;
+    exit;
+  end;
+
+  // DBK and Ultimap share the IOCTL surface.  Keep the normal CE fallback.
+  hUltimapDevice:=hdevice;
+  agentDeviceError:=ERROR_SUCCESS;
+  result:=true;
 end;
 
 function noIsWow64(processhandle: THandle; var isWow: BOOL): BOOL; stdcall;
@@ -3150,11 +3255,40 @@ var sav: pchar;
     driverdat: textfile;
 
 
+function isCEAgentMode: boolean;
+var i: integer;
+begin
+  result:=GetEnvironmentVariable('CEAI_AGENT_MODE')='1';
+  if result then exit;
+
+  for i:=1 to ParamCount do
+    if SameText(ParamStr(i), 'CEAI_AGENT_MODE') then
+    begin
+      result:=true;
+      exit;
+    end;
+end;
+
 //    servicestatus: _service_status;
 procedure DBK32Initialize;
 var le: integer;
 begin
   outputdebugstring('DBK32Initialize');
+
+  // The CE-AI bridge must not create or start a service.  UDL owns that
+  // lifecycle; here we only connect to an already exposed DBK device.
+  if isCEAgentMode then
+  begin
+    if not DBK32ConnectExistingDevice(GetEnvironmentVariable('CEAI_DBK_DEVICE')) then
+    begin
+      hDevice:=INVALID_HANDLE_VALUE;
+      hUltimapDevice:=INVALID_HANDLE_VALUE;
+      OutputDebugString('CE-AI: existing DBK device was not available');
+    end
+    else
+      OutputDebugString(pchar('CE-AI: connected to DBK device '+agentDeviceName));
+    exit;
+  end;
 
   if not requiresAdmin('DBK driver') then exit;
 
@@ -3251,7 +3385,8 @@ begin
 
       if (not fileexists(driverloc)) and (not fileexists(ultimapdriverloc)) then
       begin
-        messagebox(0,PChar(rsYouAreMissingTheDriver),PChar(rsDriverError),MB_ICONERROR or mb_ok);
+        if not isCEAgentMode then
+          messagebox(0,PChar(rsYouAreMissingTheDriver),PChar(rsDriverError),MB_ICONERROR or mb_ok);
         hDevice:=INVALID_HANDLE_VALUE;
         hUltimapDevice:=INVALID_HANDLE_VALUE;
         exit;

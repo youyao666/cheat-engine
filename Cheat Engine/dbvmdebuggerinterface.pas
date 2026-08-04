@@ -39,6 +39,8 @@ type
     resumerThread: TDBVMResumerThread;
 
     processCR3: qword;
+    attachedProcessHandle: THandle;
+    dbvmMemoryContextActive: boolean;
 
     procedure SteppingThreadLost;
 
@@ -501,7 +503,12 @@ begin
 
 
   debuggerAttachStatus:='obtaining CR3';
-  GetCR3(processhandle, processcr3);
+  if not GetCR3(processhandle, processcr3) then
+  begin
+    fErrorString:='Failed obtaining the target process CR3';
+    exit(false);
+  end;
+  attachedProcessHandle:=processhandle;
   cr3log[0]:=processcr3;
 
 
@@ -511,23 +518,24 @@ begin
 
   oldforce:=forceCR3VirtualQueryEx;
   try
-    if usedbkquery then
-      forceCR3VirtualQueryEx:=true; //kernelmode VQE does not support differentiating between executable and non-executable memory, so if it's used, use the CR3 vqe instead
+    try
+      if usedbkquery then
+        forceCR3VirtualQueryEx:=true; //kernelmode VQE does not support differentiating between executable and non-executable memory, so if it's used, use the CR3 vqe instead
 
-    usermodeloopint3:=findaob('cc','+X',fsmNotAligned,'',true);
-  except
-    on e:exception do
-    begin
-      fErrorString:=e.message;
-      exit(false);
+      usermodeloopint3:=findaob('cc','+X',fsmNotAligned,'',true);
+    except
+      on e:exception do
+      begin
+        fErrorString:=e.message;
+        exit(false);
+      end;
     end;
+  finally
+    forceCR3VirtualQueryEx:=oldforce;
   end;
-
-  forceCR3VirtualQueryEx:=oldforce;
 
   if dbvmbp_options.KernelmodeBreaks then
   begin
-
     if kernelmodeloopint3=0 then
     begin
       debuggerAttachStatus:='Scanning int3 executable memory in kernel. Step 1: Waiting for symbols';
@@ -598,11 +606,20 @@ begin
     kernelmodeloopint3:=0;
 
   result:=(usermodeloopint3<>0) or (kernelmodeloopint3<>0);
+  if result and (attachedProcessHandle<>0) and (processCR3<>0) then
+  begin
+    ActivateDBVMDebugMemoryContext(attachedProcessHandle, processCR3);
+    dbvmMemoryContextActive:=true;
+  end;
 end;
 
 constructor TDBVMDebugInterface.create;
 begin
   inherited create;
+
+  attachedProcessHandle:=0;
+  processCR3:=0;
+  dbvmMemoryContextActive:=false;
 
   if loaddbvmifneeded=false then
       raise exception.create(rsDBVMFunctionNeedsDBVM);
@@ -616,6 +633,8 @@ destructor TDBVMDebugInterface.destroy;
 begin
   resumerThread.terminate;
   freeandnil(resumerThread);
+  if dbvmMemoryContextActive then
+    DeactivateDBVMDebugMemoryContext(attachedProcessHandle, processCR3);
   inherited destroy;
 end;
 

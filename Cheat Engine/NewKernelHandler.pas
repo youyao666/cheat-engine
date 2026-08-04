@@ -7,7 +7,7 @@ interface
 {$ifdef darwin}
 uses SysUtils, MacOSAll, MacOSXPosix, macport, macportdefines;
 {$else}
-uses jwawindows, windows,LCLIntf,sysutils, dialogs, classes, controls,
+uses jwawindows, windows,LCLIntf,sysutils, dialogs, classes, controls, syncobjs,
      {$ifndef STANDALONECH}dbk32functions, vmxfunctions,debug, multicpuexecution,globals,{$endif} contnrs, Clipbrd;
 {$endif}
 
@@ -736,6 +736,15 @@ function ReadProcessMemoryCR3(cr3: QWORD; lpBaseAddress, lpBuffer: Pointer; nSiz
 function WriteProcessMemoryCR3(cr3: QWORD; lpBaseAddress, lpBuffer: Pointer; nSize: DWORD; var lpNumberOfBytesWritten: PTRUINT): BOOL; stdcall;
 function VirtualQueryExCR3(cr3: QWORD; lpAddress: Pointer; var lpBuffer: TMemoryBasicInformation; dwLength: DWORD): DWORD; stdcall;
 
+procedure ActivateDBVMDebugMemoryContext(hProcess: THandle; cr3: QWORD);
+procedure DeactivateDBVMDebugMemoryContext(hProcess: THandle; cr3: QWORD);
+procedure ClearDBVMDebugMemoryContext;
+function GetDBVMDebugMemoryContext(hProcess: THandle; out cr3: QWORD): boolean;
+procedure GetDBVMDebugMemoryDiagnostics(out active: boolean; out processHandle: THandle; out cr3: QWORD;
+  out lastReadBackend, lastWriteBackend, lastQueryBackend: integer;
+  out readCR3Attempts, readCR3Success, readFallback, writeCR3Attempts, writeCR3Success, writeFallback,
+  queryCR3Attempts, queryCR3Success, queryFallback: QWORD);
+
 
 function GetPageInfoCR3(cr3: QWORD; VirtualAddress: ptruint; out lpBuffer: TMemoryBasicInformation): boolean;
 function GetNextReadablePageCR3(cr3: QWORD; VirtualAddress: ptruint; out ReadableVirtualAddress: ptruint): boolean;
@@ -977,6 +986,110 @@ resourcestring
   rsYourCpuMustBeAbleToRunDbvmToUseThisFunction = 'Your cpu must be able to run dbvm to use this function';
   rsCouldnTBeOpened = '%s couldn''t be opened';
   rsDBVMIsNotLoadedThisFeatureIsNotUsable = 'DBVM is not loaded. This feature is not usable';
+
+{$ifdef windows}
+var
+  dbvmDebugMemoryContextCS: TCriticalSection;
+  dbvmDebugMemoryProcessHandle: THandle;
+  dbvmDebugMemoryCR3: QWORD;
+  dbvmDebugMemoryLastReadBackend: integer;
+  dbvmDebugMemoryLastWriteBackend: integer;
+  dbvmDebugMemoryLastQueryBackend: integer;
+  dbvmDebugMemoryReadCR3Attempts, dbvmDebugMemoryReadCR3Success, dbvmDebugMemoryReadFallback: QWORD;
+  dbvmDebugMemoryWriteCR3Attempts, dbvmDebugMemoryWriteCR3Success, dbvmDebugMemoryWriteFallback: QWORD;
+  dbvmDebugMemoryQueryCR3Attempts, dbvmDebugMemoryQueryCR3Success, dbvmDebugMemoryQueryFallback: QWORD;
+
+procedure ActivateDBVMDebugMemoryContext(hProcess: THandle; cr3: QWORD);
+begin
+  if (hProcess=0) or (cr3=0) then exit;
+
+  dbvmDebugMemoryContextCS.Enter;
+  try
+    dbvmDebugMemoryProcessHandle:=hProcess;
+    dbvmDebugMemoryCR3:=cr3;
+    dbvmDebugMemoryLastReadBackend:=0;
+    dbvmDebugMemoryLastWriteBackend:=0;
+    dbvmDebugMemoryLastQueryBackend:=0;
+    dbvmDebugMemoryReadCR3Attempts:=0;
+    dbvmDebugMemoryReadCR3Success:=0;
+    dbvmDebugMemoryReadFallback:=0;
+    dbvmDebugMemoryWriteCR3Attempts:=0;
+    dbvmDebugMemoryWriteCR3Success:=0;
+    dbvmDebugMemoryWriteFallback:=0;
+    dbvmDebugMemoryQueryCR3Attempts:=0;
+    dbvmDebugMemoryQueryCR3Success:=0;
+    dbvmDebugMemoryQueryFallback:=0;
+  finally
+    dbvmDebugMemoryContextCS.Leave;
+  end;
+end;
+
+procedure DeactivateDBVMDebugMemoryContext(hProcess: THandle; cr3: QWORD);
+begin
+  dbvmDebugMemoryContextCS.Enter;
+  try
+    if (dbvmDebugMemoryProcessHandle=hProcess) and (dbvmDebugMemoryCR3=cr3) then
+    begin
+      dbvmDebugMemoryProcessHandle:=0;
+      dbvmDebugMemoryCR3:=0;
+    end;
+  finally
+    dbvmDebugMemoryContextCS.Leave;
+  end;
+end;
+
+procedure ClearDBVMDebugMemoryContext;
+begin
+  dbvmDebugMemoryContextCS.Enter;
+  try
+    dbvmDebugMemoryProcessHandle:=0;
+    dbvmDebugMemoryCR3:=0;
+  finally
+    dbvmDebugMemoryContextCS.Leave;
+  end;
+end;
+
+function GetDBVMDebugMemoryContext(hProcess: THandle; out cr3: QWORD): boolean;
+begin
+  dbvmDebugMemoryContextCS.Enter;
+  try
+    result:=(hProcess<>0) and (dbvmDebugMemoryProcessHandle=hProcess) and (dbvmDebugMemoryCR3<>0);
+    if result then
+      cr3:=dbvmDebugMemoryCR3
+    else
+      cr3:=0;
+  finally
+    dbvmDebugMemoryContextCS.Leave;
+  end;
+end;
+
+procedure GetDBVMDebugMemoryDiagnostics(out active: boolean; out processHandle: THandle; out cr3: QWORD;
+  out lastReadBackend, lastWriteBackend, lastQueryBackend: integer;
+  out readCR3Attempts, readCR3Success, readFallback, writeCR3Attempts, writeCR3Success, writeFallback,
+  queryCR3Attempts, queryCR3Success, queryFallback: QWORD);
+begin
+  dbvmDebugMemoryContextCS.Enter;
+  try
+    active:=(dbvmDebugMemoryProcessHandle<>0) and (dbvmDebugMemoryCR3<>0);
+    processHandle:=dbvmDebugMemoryProcessHandle;
+    cr3:=dbvmDebugMemoryCR3;
+    lastReadBackend:=dbvmDebugMemoryLastReadBackend;
+    lastWriteBackend:=dbvmDebugMemoryLastWriteBackend;
+    lastQueryBackend:=dbvmDebugMemoryLastQueryBackend;
+    readCR3Attempts:=dbvmDebugMemoryReadCR3Attempts;
+    readCR3Success:=dbvmDebugMemoryReadCR3Success;
+    readFallback:=dbvmDebugMemoryReadFallback;
+    writeCR3Attempts:=dbvmDebugMemoryWriteCR3Attempts;
+    writeCR3Success:=dbvmDebugMemoryWriteCR3Success;
+    writeFallback:=dbvmDebugMemoryWriteFallback;
+    queryCR3Attempts:=dbvmDebugMemoryQueryCR3Attempts;
+    queryCR3Success:=dbvmDebugMemoryQueryCR3Success;
+    queryFallback:=dbvmDebugMemoryQueryFallback;
+  finally
+    dbvmDebugMemoryContextCS.Leave;
+  end;
+end;
+{$endif}
 
  {$ifndef JNI}
 
@@ -1406,7 +1519,8 @@ var
   wle: TWriteLogEntry;
 {$endif}
   x: PTRUINT;
-  cr3: ptruint;
+  cr3: qword;
+  hasDBVMDebugMemoryContext: boolean;
 begin
    {$ifndef darwin}
   if not verifyAddress(qword(lpBaseAddress)) then
@@ -1434,24 +1548,53 @@ begin
   end;
 {$endif}
 
-  {$ifdef windows}
-  {$ifdef cpu64}
-  {$ifndef STANDALONECH}
-  if (((qword(lpBaseAddress) and (qword(1) shl 63))<>0) and //kernelmode access
-      (@WriteProcessMemoryActual=defaultWPM) and
-      isRunningDBVM) //but DBVM is loaded
-  or
-      DBVMWatchBPActive
-  then
+{$if defined(windows) and defined(cpu64) and not defined(STANDALONECH)}
+  hasDBVMDebugMemoryContext:=GetDBVMDebugMemoryContext(hProcess, cr3);
+  if hasDBVMDebugMemoryContext then
   begin
-    if dbk32functions.GetCR3(hProcess, cr3) then   //todo: maybe just a getkernelcr3
-      result:=WriteProcessMemoryCR3(cr3, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten);
+    dbvmDebugMemoryContextCS.Enter;
+    try
+      inc(dbvmDebugMemoryWriteCR3Attempts);
+      dbvmDebugMemoryLastWriteBackend:=1;
+    finally
+      dbvmDebugMemoryContextCS.Leave;
+    end;
+    result:=WriteProcessMemoryCR3(cr3, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten);
+    if result then
+    begin
+      dbvmDebugMemoryContextCS.Enter;
+      try inc(dbvmDebugMemoryWriteCR3Success); finally dbvmDebugMemoryContextCS.Leave; end;
+    end;
+    if not result then
+    begin
+      dbvmDebugMemoryContextCS.Enter;
+      try
+        inc(dbvmDebugMemoryWriteFallback);
+        dbvmDebugMemoryLastWriteBackend:=2;
+      finally
+        dbvmDebugMemoryContextCS.Leave;
+      end;
+      result:=WriteProcessMemoryActual(hProcess, lpBaseAddress, lpbuffer, nSize, lpNumberOfBytesWritten);
+    end;
   end
   else
-  {$endif}
-  {$endif}
-  {$endif}
+  begin
+    if (((qword(lpBaseAddress) and (qword(1) shl 63))<>0) and //kernelmode access
+        (@WriteProcessMemoryActual=defaultWPM) and
+        isRunningDBVM) //but DBVM is loaded
+    or
+        DBVMWatchBPActive
+    then
+    begin
+      if dbk32functions.GetCR3(hProcess, cr3) then   //todo: maybe just a getkernelcr3
+        result:=WriteProcessMemoryCR3(cr3, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten);
+    end
+    else
+      result:=WriteProcessMemoryActual(hProcess, lpBaseAddress, lpbuffer, nSize, lpNumberOfBytesWritten);
+  end;
+  {$else}
   result:=WriteProcessMemoryActual(hProcess, lpBaseAddress, lpbuffer, nSize, lpNumberOfBytesWritten);
+  {$endif}
 
 {$ifndef STANDALONECH}
   if result and logwrites and (wle<>nil) then
@@ -1465,7 +1608,7 @@ begin
 end;
 
 function ReadProcessMemory(hProcess: THandle; lpBaseAddress, lpBuffer: Pointer; nSize: size_t; var lpNumberOfBytesRead: PTRUINT): BOOL; stdcall;
-var cr3: ptruint;
+var cr3: qword;
 begin
   {$ifndef darwin}
   if not verifyAddress(qword(lpBaseAddress)) then
@@ -1479,6 +1622,30 @@ begin
   {$ifdef windows}
   {$ifdef cpu64}
   {$ifndef STANDALONECH}
+  if GetDBVMDebugMemoryContext(hProcess, cr3) then
+  begin
+    dbvmDebugMemoryContextCS.Enter;
+    try
+      inc(dbvmDebugMemoryReadCR3Attempts);
+      dbvmDebugMemoryLastReadBackend:=1;
+    finally
+      dbvmDebugMemoryContextCS.Leave;
+    end;
+    if ReadProcessMemoryCR3(cr3, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead) then
+    begin
+      dbvmDebugMemoryContextCS.Enter;
+      try inc(dbvmDebugMemoryReadCR3Success); finally dbvmDebugMemoryContextCS.Leave; end;
+      exit(true);
+    end;
+    dbvmDebugMemoryContextCS.Enter;
+    try
+      inc(dbvmDebugMemoryReadFallback);
+      dbvmDebugMemoryLastReadBackend:=2;
+    finally
+      dbvmDebugMemoryContextCS.Leave;
+    end;
+  end;
+
   if (((qword(lpBaseAddress) and (qword(1) shl 63))<>0) and //kernelmode access
      (defaultRPM=@ReadProcessMemoryActual) and
      isRunningDBVM) //but DBVM is loaded
@@ -1496,11 +1663,36 @@ begin
 end;
 
 function VirtualQueryEx(hProcess: THandle; lpAddress: Pointer; var lpBuffer: TMemoryBasicInformation; dwLength: DWORD): DWORD; stdcall;
-var cr3: ptruint;
+var cr3: qword;
 begin
   {$ifdef windows}
   {$ifdef cpu64}
   {$ifndef STANDALONECH}
+  if GetDBVMDebugMemoryContext(hProcess, cr3) then
+  begin
+    dbvmDebugMemoryContextCS.Enter;
+    try
+      inc(dbvmDebugMemoryQueryCR3Attempts);
+      dbvmDebugMemoryLastQueryBackend:=1;
+    finally
+      dbvmDebugMemoryContextCS.Leave;
+    end;
+    result:=VirtualQueryExCR3(cr3, lpAddress, lpBuffer, dwLength);
+    if result<>0 then
+    begin
+      dbvmDebugMemoryContextCS.Enter;
+      try inc(dbvmDebugMemoryQueryCR3Success); finally dbvmDebugMemoryContextCS.Leave; end;
+      exit;
+    end;
+    dbvmDebugMemoryContextCS.Enter;
+    try
+      inc(dbvmDebugMemoryQueryFallback);
+      dbvmDebugMemoryLastQueryBackend:=2;
+    finally
+      dbvmDebugMemoryContextCS.Leave;
+    end;
+  end;
+
   if forceCR3VirtualQueryEx then
   begin
     if dbk32functions.GetCR3(hProcess, cr3) then
@@ -2406,6 +2598,24 @@ initialization
   VirtualQueryEx_StartCache:=VirtualQueryEx_StartCache_stub;
   VirtualQueryEx_EndCache:=VirtualQueryEx_EndCache_stub;
 
+  {$ifdef windows}
+  dbvmDebugMemoryContextCS:=TCriticalSection.Create;
+  dbvmDebugMemoryProcessHandle:=0;
+  dbvmDebugMemoryCR3:=0;
+  dbvmDebugMemoryLastReadBackend:=0;
+  dbvmDebugMemoryLastWriteBackend:=0;
+  dbvmDebugMemoryLastQueryBackend:=0;
+  dbvmDebugMemoryReadCR3Attempts:=0;
+  dbvmDebugMemoryReadCR3Success:=0;
+  dbvmDebugMemoryReadFallback:=0;
+  dbvmDebugMemoryWriteCR3Attempts:=0;
+  dbvmDebugMemoryWriteCR3Success:=0;
+  dbvmDebugMemoryWriteFallback:=0;
+  dbvmDebugMemoryQueryCR3Attempts:=0;
+  dbvmDebugMemoryQueryCR3Success:=0;
+  dbvmDebugMemoryQueryFallback:=0;
+  {$endif}
+
   {$if defined(windows) and not defined(STANDALONECH)}
   DBKLoaded:=false;
 
@@ -2589,5 +2799,9 @@ initialization
 
 
 finalization
+
+  {$ifdef windows}
+  FreeAndNil(dbvmDebugMemoryContextCS);
+  {$endif}
 
 end.

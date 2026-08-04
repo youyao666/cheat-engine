@@ -87,6 +87,50 @@ PSRLINR PsRemoveLoadImageNotifyRoutine2;
 UNICODE_STRING  uszDeviceString;
 PVOID BufDeviceString=NULL;
 
+#ifdef CEAI_UDL_COMPAT
+static NTSTATUS InitializeCEAIObjectNames(
+	PVOID *DriverBuffer,
+	PVOID *ProcessEventBuffer,
+	PVOID *ThreadEventBuffer,
+	PUNICODE_STRING DriverString,
+	PUNICODE_STRING DeviceString,
+	PUNICODE_STRING ProcessEventString,
+	PUNICODE_STRING ThreadEventString)
+{
+	static const WCHAR defaultDriverString[] = L"\\Device\\CEDRIVER73";
+	static const WCHAR defaultDeviceString[] = L"\\DosDevices\\CEDRIVER73";
+	static const WCHAR defaultProcessEventString[] = L"\\BaseNamedObjects\\DBKProcList60";
+	static const WCHAR defaultThreadEventString[] = L"\\BaseNamedObjects\\DBKThreadList60";
+
+	*DriverBuffer = ExAllocatePool(PagedPool, sizeof(defaultDriverString));
+	BufDeviceString = ExAllocatePool(PagedPool, sizeof(defaultDeviceString));
+	*ProcessEventBuffer = ExAllocatePool(PagedPool, sizeof(defaultProcessEventString));
+	*ThreadEventBuffer = ExAllocatePool(PagedPool, sizeof(defaultThreadEventString));
+	if (!*DriverBuffer || !BufDeviceString || !*ProcessEventBuffer || !*ThreadEventBuffer)
+	{
+		if (*DriverBuffer) ExFreePool(*DriverBuffer);
+		if (BufDeviceString) ExFreePool(BufDeviceString);
+		if (*ProcessEventBuffer) ExFreePool(*ProcessEventBuffer);
+		if (*ThreadEventBuffer) ExFreePool(*ThreadEventBuffer);
+		*DriverBuffer = NULL;
+		BufDeviceString = NULL;
+		*ProcessEventBuffer = NULL;
+		*ThreadEventBuffer = NULL;
+		return STATUS_INSUFFICIENT_RESOURCES;
+	}
+
+	RtlCopyMemory(*DriverBuffer, defaultDriverString, sizeof(defaultDriverString));
+	RtlCopyMemory(BufDeviceString, defaultDeviceString, sizeof(defaultDeviceString));
+	RtlCopyMemory(*ProcessEventBuffer, defaultProcessEventString, sizeof(defaultProcessEventString));
+	RtlCopyMemory(*ThreadEventBuffer, defaultThreadEventString, sizeof(defaultThreadEventString));
+	RtlInitUnicodeString(DriverString, (PCWSTR)*DriverBuffer);
+	RtlInitUnicodeString(DeviceString, (PCWSTR)BufDeviceString);
+	RtlInitUnicodeString(ProcessEventString, (PCWSTR)*ProcessEventBuffer);
+	RtlInitUnicodeString(ThreadEventString, (PCWSTR)*ThreadEventBuffer);
+	return STATUS_SUCCESS;
+}
+#endif
+
 
 
 void hideme(PDRIVER_OBJECT DriverObject)
@@ -262,21 +306,64 @@ NTSTATUS DriverEntry(IN PDRIVER_OBJECT DriverObject,
 				ExFreePool(bufB);
 				ExFreePool(bufC);
 				ExFreePool(bufD);
+				BufDriverString = NULL;
+				BufDeviceString = NULL;
+				BufProcessEventString = NULL;
+				BufThreadEventString = NULL;
 
-				//DbgPrint("Failed reading the value\n");
 				ZwClose(reg);
-				return STATUS_UNSUCCESSFUL;;
+				reg = 0;
+#ifdef CEAI_UDL_COMPAT
+				// UDL owns the service and may not provide CE's private A/B/C/D
+				// values.  The AI build uses a stable device contract in that case.
+				ntStatus = InitializeCEAIObjectNames(&BufDriverString,
+					&BufProcessEventString, &BufThreadEventString,
+					&uszDriverString, &uszDeviceString,
+					&uszProcessEventString, &uszThreadEventString);
+				if (ntStatus != STATUS_SUCCESS)
+					return ntStatus;
+#else
+				return STATUS_UNSUCCESSFUL;
+#endif
 			}
 
 		}
 		else
 		{
-			//DbgPrint("Failed opening the key\n");
-			return STATUS_UNSUCCESSFUL;;
+#ifdef CEAI_UDL_COMPAT
+			ntStatus = InitializeCEAIObjectNames(&BufDriverString,
+				&BufProcessEventString, &BufThreadEventString,
+				&uszDriverString, &uszDeviceString,
+				&uszProcessEventString, &uszThreadEventString);
+			if (ntStatus != STATUS_SUCCESS)
+				return ntStatus;
+#else
+			return STATUS_UNSUCCESSFUL;
+#endif
 		}
 	}
 	else
+	{
+#ifdef CEAI_UDL_COMPAT
+		// CE's DBVM secondary loader passes a zeroed synthetic DRIVER_OBJECT.
+		// Keep that private dispatch mode, but let external loaders that provide
+		// a real driver object expose the normal Windows device even without a
+		// registry path.
+		if (DriverObject && DriverObject->Size != 0)
+		{
+			ntStatus = InitializeCEAIObjectNames(&BufDriverString,
+				&BufProcessEventString, &BufThreadEventString,
+				&uszDriverString, &uszDeviceString,
+				&uszProcessEventString, &uszThreadEventString);
+			if (ntStatus != STATUS_SUCCESS)
+				return ntStatus;
+		}
+		else
+			loadedbydbvm = TRUE;
+#else
 		loadedbydbvm = TRUE;
+#endif
+	}
 
 	ntStatus = STATUS_SUCCESS;
 

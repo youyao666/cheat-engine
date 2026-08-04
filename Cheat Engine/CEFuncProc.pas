@@ -761,6 +761,12 @@ begin
     freeandnil(debuggerthread);
   end;
 
+  {$ifdef windows}
+  {$ifndef netclient}
+  ClearDBVMDebugMemoryContext;
+  {$endif}
+  {$endif}
+
   memorybrowser.showDebugPanels:=false;
 end;
 
@@ -3937,7 +3943,12 @@ end;
 
 function requiresAdmin(featurename: string=''): boolean;
 var d: TRequireAdminDialog;
+  i: integer;
 begin
+  if GetEnvironmentVariable('CEAI_AGENT_MODE')='1' then exit(false);
+  for i:=1 to ParamCount do
+    if SameText(ParamStr(i), 'CEAI_AGENT_MODE') then exit(false);
+
   result:=runningAsAdmin;
 
   if not result then

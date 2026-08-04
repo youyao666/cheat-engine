@@ -27,7 +27,7 @@
       <AutoIncrementBuild Value="True"/>
       <MajorVersionNr Value="7"/>
       <MinorVersionNr Value="5"/>
-      <BuildNr Value="7712"/>
+      <BuildNr Value="7722"/>
       <Language Value="041C"/>
       <CharSet Value="04B0"/>
       <StringTable CompanyName="Cheat Engine" FileDescription="Cheat Engine" ProductVersion="7.5"/>
@@ -3144,72 +3144,4 @@
       </OtherDefines>
     </Other>
   </CompilerOptions>
-  <Debugging>
-    <Exceptions Count="19">
-      <Item1>
-        <Name Value="EAbort"/>
-        <Enabled Value="False"/>
-      </Item1>
-      <Item2>
-        <Name Value="ECodetoolError"/>
-        <Enabled Value="False"/>
-      </Item2>
-      <Item3>
-        <Name Value="EFOpenError"/>
-      </Item3>
-      <Item4>
-        <Name Value="Unknown"/>
-        <Enabled Value="False"/>
-      </Item4>
-      <Item5>
-        <Name Value="ERegistryException"/>
-      </Item5>
-      <Item6>
-        <Name Value="Exception"/>
-        <Enabled Value="False"/>
-      </Item6>
-      <Item7>
-        <Name Value="EConvertError"/>
-      </Item7>
-      <Item8>
-        <Name Value="symexception"/>
-      </Item8>
-      <Item9>
-        <Name Value="External: SIGILL"/>
-        <Enabled Value="False"/>
-      </Item9>
-      <Item10>
-        <Name Value="SIGILL"/>
-        <Enabled Value="False"/>
-      </Item10>
-      <Item11>
-        <Name Value="EAssemblerException"/>
-      </Item11>
-      <Item12>
-        <Name Value="EAutoAssembler"/>
-      </Item12>
-      <Item13>
-        <Name Value="EVariantError"/>
-      </Item13>
-      <Item14>
-        <Name Value="EFileMapError"/>
-      </Item14>
-      <Item15>
-        <Name Value="EParserError"/>
-      </Item15>
-      <Item16>
-        <Name Value="EProcess"/>
-        <Enabled Value="False"/>
-      </Item16>
-      <Item17>
-        <Name Value="ESavedScanException"/>
-      </Item17>
-      <Item18>
-        <Name Value="EAdvancedOptionsDuplicateException"/>
-      </Item18>
-      <Item19>
-        <Name Value="EDebuggerAttachException"/>
-      </Item19>
-    </Exceptions>
-  </Debugging>
 </CONFIG>
